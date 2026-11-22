@@ -4,8 +4,8 @@
 
 | 子项目 | 内容 | 状态 |
 |---|---|---|
-| `01_op179089_FP32加法算子（A3验收版）` | 同形连续 FP32 逐元素加法，1D–8D | Atlas A3 真机 **100% 验收通过** |
-| `02_cannjudge_2524_通用Add广播算子` | 通用多类型、任意维 NumPy 广播加法（CANN Judge #2524 提交版） | 源码就绪，支持 NPU / CPU 双模式编译 |
+| `01-op179089-fp32-add` | 同形连续 FP32 逐元素加法，1D–8D | Atlas A3 真机 **100% 验收通过** |
+| `02-cannjudge-2524-broadcast-add` | 通用多类型、任意维 NumPy 广播加法（CANN Judge #2524 提交版） | 源码就绪，支持 NPU / CPU 双模式编译 |
 
 > 本仓库是个人学习与测试过程的整理归档，用于记录 Ascend C 向量算子的排错、优化与验证方法，**不是生产级算子库**。
 
@@ -17,7 +17,7 @@
 .
 ├── README.md                                  # 本文件
 ├── 算子整合总结文档.md                          # 项目全景、技术总结、性能数据、溯源清单
-├── 01_op179089_FP32加法算子（A3验收版）/
+├── 01-op179089-fp32-add/                      # FP32 逐元素 Add（Atlas A3 验收版）
 │   ├── op179089.asc                           # 验收版源码（主入口 + AddKernel）
 │   ├── CMakeLists.txt / build.sh              # CANN 9.0 构建脚本
 │   ├── baseline/ next/ op179089.patch         # 基线、最终版、统一补丁
@@ -25,12 +25,12 @@
 │   ├── scripts/                               # 回归套件、msprof 解析、Tile 建模、安全合入
 │   ├── tests/                                 # Mock 头文件 + 5 阶段本地回归
 │   └── reports/                               # 诊断报告、A3 验收报告、memcheck 原始日志、msprof 数据
-├── 02_cannjudge_2524_通用Add广播算子/
+├── 02-cannjudge-2524-broadcast-add/           # 通用多类型广播 Add（CANN Judge #2524）
 │   ├── kernel.asc                             # 1392 行多类型通用广播 Add 内核 + Host 分发
 │   ├── main.asc                               # ACL 运行入口与张量 I/O
 │   ├── CMakeLists.txt / run.sh                # NPU / CPU 双模式编译调测
 │   └── sample.py / reference.py               # 造数、NumPy 参考实现、精度校验
-└── 99_历史版本与原始归档/                      # 全部原始压缩包与交接文档
+└── 99-archive/                                # 全部原始压缩包与交接文档
 ```
 
 ---
@@ -76,7 +76,7 @@ if (tailElements != 0) {
 ### 构建与验证
 
 ```bash
-cd "01_op179089_FP32加法算子（A3验收版）"
+cd "01-op179089-fp32-add"
 
 shasum -a 256 -c SHA256SUMS.txt          # 完整性校验
 
@@ -112,7 +112,7 @@ mssanitizer --tool=memcheck -- ./build-memcheck/op179089 8193
 ### 构建与调测
 
 ```bash
-cd "02_cannjudge_2524_通用Add广播算子"
+cd "02-cannjudge-2524-broadcast-add"
 source /path/to/cann/set_env.sh
 
 bash run.sh npu    # 昇腾真机
@@ -132,9 +132,9 @@ bash run.sh cpu    # 无设备时的 CANN CPU 调测模式（不可测性能）
 | 文档 | 说明 |
 |---|---|
 | [`算子整合总结文档.md`](算子整合总结文档.md) | 项目全景、横向对比、性能数据、原始文件溯源 |
-| [`reports/0001-ub-access-diagnosis.md`](01_op179089_FP32加法算子（A3验收版）/reports/0001-ub-access-diagnosis.md) | UB 越界报错的根因推导过程 |
-| [`reports/0002-atlas-a3-verification-report.md`](01_op179089_FP32加法算子（A3验收版）/reports/0002-atlas-a3-verification-report.md) | Atlas A3 真机验收报告 |
-| [`reports/npu-suite/report.md`](01_op179089_FP32加法算子（A3验收版）/reports/npu-suite/report.md) | msprof / 回归套件汇总 |
+| [`reports/0001-ub-access-diagnosis.md`](01-op179089-fp32-add/reports/0001-ub-access-diagnosis.md) | UB 越界报错的根因推导过程 |
+| [`reports/0002-atlas-a3-verification-report.md`](01-op179089-fp32-add/reports/0002-atlas-a3-verification-report.md) | Atlas A3 真机验收报告 |
+| [`reports/npu-suite/report.md`](01-op179089-fp32-add/reports/npu-suite/report.md) | msprof / 回归套件汇总 |
 
 ## 说明
 
