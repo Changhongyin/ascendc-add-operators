@@ -1,0 +1,4 @@
+[mssanitizer] logging to file: ./mindstudio_sanitizer_log/mssanitizer_20261122115140_42990.log
+[mssanitizer] Start memcheck sanitizer on kernel "op179089(unsigned char*, unsigned char*, unsigned char*)"
+[mssanitizer] Sanitizer finished on kernel "op179089(unsigned char*, unsigned char*, unsigned char*)". No error detected.
+PASS N=7 (blocks=1, CPU comparison and output guard)

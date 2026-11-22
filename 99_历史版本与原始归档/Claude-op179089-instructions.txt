@@ -1,0 +1,26 @@
+Claude, continue development of the op179089 Ascend C operator.
+
+Unpack op179089-current.zip into a new working directory. Use the extracted op179089/ directory as the project root. Read README.md and verify the files against SHA256SUMS.txt before editing.
+
+Scope
+
+- Keep all project edits and generated outputs inside this extracted directory. Use op179089.asc as the source of truth. Update next/op179089.asc, op179089.patch, and SHA256SUMS.txt if the source changes. Keep baseline/ intact.
+- Edit the build files, validation scripts, tests, or README only where the change requires it. Leave the input ZIP and the cloud checkout untouched.
+- Preserve same-shape contiguous FP32 addition, 1D–8D inputs, the 33,554,432-element limit, and the existing CLI. Start with the 4096-element tile.
+
+First objective
+
+- Reproduce and diagnose the UB memory-access reports from instrumented Atlas A3 runs at N=8193 and N=40961. Capture the first error, its call stack, and the affected block. Check both aligned and unaligned paths. Reducing Add to the valid element count cleared the small cases at N=1, 7, and 9, but the two larger cases still reported errors.
+- Make the smallest fix supported by the evidence. Inspect UB allocation, vector repeat and mask behavior, DMA lengths, and buffer lifetimes. Preserve CPU reference comparisons and output guards. Keep the regression test meaningful when updating its AddKernel expectation.
+
+Validation and delivery
+
+1. Run python3 tests/test_local_all.py. Verify all 25 functional cases, 11 invalid-argument cases, and 4 extra shape and length boundary cases, including 8D and the maximum element count.
+2. On Atlas A3 with CANN 9.0 and dav-2201, build an instrumented binary and run memcheck at N=1, 7, 9, 8193, and 40961, plus --shape 16x257. Use the command below for each case. Confirm that the operator ran and the sanitizer explicitly reported no errors. The process exit code alone is insufficient.
+
+   cmake -S . -B build-memcheck -DNPU_ARCH=dav-2201 -DCMAKE_BUILD_TYPE=Release "-DCMAKE_ASC_FLAGS=--cce-enable-sanitizer -g"
+   cmake --build build-memcheck --parallel
+   mssanitizer --tool=memcheck -- ./build-memcheck/op179089 8193
+
+3. Build the release binary and rerun the full NPU suite. Collect msprof output and record median latency and effective bandwidth at 16,777,216 and 33,554,432 elements. Keep the raw memcheck logs and profile reports in reports/.
+4. Deliver the updated source, patch, and a short report listing the root cause, changed files, test results, and any remaining issues. If Atlas A3 is unavailable, complete the local work and state exactly which hardware checks are pending.

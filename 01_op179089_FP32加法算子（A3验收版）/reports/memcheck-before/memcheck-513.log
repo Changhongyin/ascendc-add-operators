@@ -1,0 +1,20 @@
+[mssanitizer] logging to file: ./mindstudio_sanitizer_log/mssanitizer_20261122114251_40095.log
+[mssanitizer] Start memcheck sanitizer on kernel "op179089(unsigned char*, unsigned char*, unsigned char*)"
+PASS N=513 (blocks=1, CPU comparison and output guard)
+====== ERROR: illegal write of size 4
+======    at 0xc000 on UB in "op179089(unsigned char*, unsigned char*, unsigned char*)"
+======    in block aiv(0) on device 0
+======    code in pc current 0x8d18 (serialNo:33)
+======    #0 /mnt/workspace/data/op179089-verify/op179089-claude-out/op179089.asc:95:9
+======    #1 /mnt/workspace/data/op179089-verify/op179089-claude-out/op179089.asc:69:13
+======    #2 /mnt/workspace/data/op179089-verify/op179089-claude-out/op179089.asc:145:12
+
+====== ERROR: illegal read of size 4
+======    at 0x8000 on UB in "op179089(unsigned char*, unsigned char*, unsigned char*)"
+======    in block aiv(0) on device 0
+======    code in pc current 0x8d18 (serialNo:33)
+======    #0 /mnt/workspace/data/op179089-verify/op179089-claude-out/op179089.asc:95:9
+======    #1 /mnt/workspace/data/op179089-verify/op179089-claude-out/op179089.asc:69:13
+======    #2 /mnt/workspace/data/op179089-verify/op179089-claude-out/op179089.asc:145:12
+
+[mssanitizer] Sanitizer finished on kernel "op179089(unsigned char*, unsigned char*, unsigned char*)". See all detected errors above.

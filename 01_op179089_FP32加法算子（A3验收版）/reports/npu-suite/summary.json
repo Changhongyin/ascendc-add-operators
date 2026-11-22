@@ -1,0 +1,138 @@
+{
+  "npu_arch": "dav-2201",
+  "binary": "/mnt/workspace/data/op179089-verify/op179089-claude-out/build/op179089",
+  "validation": {
+    "status": "PASS",
+    "returncode": 0,
+    "pass_count": 25,
+    "expected_count": 25,
+    "stderr": ""
+  },
+  "invalid_args": {
+    "status": "PASS",
+    "passed": 11,
+    "total": 11,
+    "failures": []
+  },
+  "shape_checks": {
+    "status": "PASS",
+    "passed": 4,
+    "total": 4,
+    "failures": []
+  },
+  "benchmark": {
+    "status": "PASS",
+    "rows": [
+      {
+        "N": 16,
+        "blocks": 1,
+        "median_us": 7.924,
+        "min_us": 7.863,
+        "max_us": 8.028,
+        "bw_gbs": 0.02
+      },
+      {
+        "N": 1024,
+        "blocks": 1,
+        "median_us": 7.946,
+        "min_us": 7.881,
+        "max_us": 8.044,
+        "bw_gbs": 1.55
+      },
+      {
+        "N": 8193,
+        "blocks": 9,
+        "median_us": 7.979,
+        "min_us": 6.697,
+        "max_us": 7.992,
+        "bw_gbs": 12.32
+      },
+      {
+        "N": 65536,
+        "blocks": 40,
+        "median_us": 7.923,
+        "min_us": 7.846,
+        "max_us": 7.985,
+        "bw_gbs": 99.27
+      },
+      {
+        "N": 262144,
+        "blocks": 40,
+        "median_us": 7.919,
+        "min_us": 7.093,
+        "max_us": 8.045,
+        "bw_gbs": 397.22
+      },
+      {
+        "N": 1048575,
+        "blocks": 40,
+        "median_us": 7.906,
+        "min_us": 7.42,
+        "max_us": 8.063,
+        "bw_gbs": 1591.47
+      },
+      {
+        "N": 1048576,
+        "blocks": 40,
+        "median_us": 7.928,
+        "min_us": 6.573,
+        "max_us": 8.049,
+        "bw_gbs": 1587.09
+      },
+      {
+        "N": 4194304,
+        "blocks": 40,
+        "median_us": 11.37,
+        "min_us": 11.363,
+        "max_us": 11.38,
+        "bw_gbs": 4426.58
+      },
+      {
+        "N": 16777216,
+        "blocks": 40,
+        "median_us": 184.981,
+        "min_us": 184.695,
+        "max_us": 185.115,
+        "bw_gbs": 1088.36
+      },
+      {
+        "N": 33554432,
+        "blocks": 40,
+        "median_us": 372.981,
+        "min_us": 372.723,
+        "max_us": 373.038,
+        "bw_gbs": 1079.56
+      }
+    ]
+  },
+  "msprof": [
+    {
+      "N": 16777216,
+      "status": "PASS",
+      "returncode": 0,
+      "output_dir": "/mnt/workspace/data/op179089-verify/op179089-claude-out/reports/npu-suite/msprof_16777216.20bswdhs"
+    },
+    {
+      "N": 33554432,
+      "status": "PASS",
+      "returncode": 0,
+      "output_dir": "/mnt/workspace/data/op179089-verify/op179089-claude-out/reports/npu-suite/msprof_33554432.fnxr5t56"
+    }
+  ],
+  "mssanitizer": [
+    {
+      "target": "8193",
+      "status": "PASS",
+      "returncode": 0,
+      "stdout": "[mssanitizer] logging to file: ./mindstudio_sanitizer_log/mssanitizer_20261122115244_43540.log\n[mssanitizer] Start memcheck sanitizer on kernel \"op179089(unsigned char*, unsigned char*, unsigned char*)\"\n[mssanitizer] Sanitizer finished on kernel \"op179089(unsigned char*, unsigned char*, unsigned char*)\". No error detected.\nPASS N=8193 (blocks=9, CPU comparison and output guard)\n",
+      "stderr": ""
+    },
+    {
+      "target": "--shape 16x257",
+      "status": "PASS",
+      "returncode": 0,
+      "stdout": "[mssanitizer] logging to file: ./mindstudio_sanitizer_log/mssanitizer_20261122115247_43568.log\n[mssanitizer] Start memcheck sanitizer on kernel \"op179089(unsigned char*, unsigned char*, unsigned char*)\"\n[mssanitizer] Sanitizer finished on kernel \"op179089(unsigned char*, unsigned char*, unsigned char*)\". No error detected.\nPASS N=4112 shape=16x257 (blocks=5, CPU comparison and output guard)\n",
+      "stderr": ""
+    }
+  ]
+}

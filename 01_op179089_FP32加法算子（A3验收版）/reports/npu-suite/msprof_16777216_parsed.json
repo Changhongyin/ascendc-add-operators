@@ -1,0 +1,46 @@
+{
+  "source": "reports/npu-suite/msprof_16777216.20bswdhs",
+  "log": {
+    "samples": 1,
+    "durations_us": [
+      142.517151
+    ],
+    "block_dim": 40,
+    "kernel_name": "op179089",
+    "median_us": 142.517,
+    "min_us": 142.517,
+    "max_us": 142.517
+  },
+  "csv_metrics": {
+    "Task Duration(us)": {
+      "count": 1,
+      "median": 142.5172,
+      "min": 142.5172,
+      "max": 142.5172
+    },
+    "aiv_mte2_ratio": {
+      "count": 80,
+      "median": 0.9809,
+      "min": 0.9081,
+      "max": 0.9897
+    },
+    "aiv_mte3_ratio": {
+      "count": 80,
+      "median": 0.727,
+      "min": 0.5297,
+      "max": 0.8473
+    },
+    "aiv_scalar_ratio": {
+      "count": 40,
+      "median": 0.1439,
+      "min": 0.133,
+      "max": 0.1658
+    },
+    "aiv_vec_ratio": {
+      "count": 40,
+      "median": 0.0754,
+      "min": 0.0711,
+      "max": 0.0863
+    }
+  }
+}

@@ -1,0 +1,423 @@
+--- baseline/op179089.asc	2026-11-22 09:42:26
++++ next/op179089.asc	2026-11-22 11:51:23
+@@ -3,22 +3,31 @@
+ #include "acl/acl.h"
+ 
+ #include <algorithm>
++#include <cerrno>
+ #include <cstddef>
+ #include <cstdint>
+ #include <cstdio>
+ #include <cstdlib>
+ #include <cstring>
++#include <string>
+ #include <vector>
+ 
+ namespace {
+ constexpr uint32_t kTileElements = 4096;
+ constexpr uint32_t kDmaAlignmentElements = 32 / sizeof(float);
+-constexpr uint32_t kMaxLength = 1024 * 1024;
+-constexpr uint32_t kMaxBlocks = 40;
++// One 256 B vector repeat holds 64 FP32 elements; splitting non-multiple counts here avoids
++// CANN 9.0 Counter-Mode vadd memcheck UB out-of-bounds reports with zero extra DMA.
++constexpr uint32_t kVectorRepeatElements = 256 / sizeof(float);
++// 32M float32 elements = 128 MB/tensor (384 MB total across x/y/z), exceeding A2/A3 L2 cache.
++constexpr uint32_t kMaxLength = 32 * 1024 * 1024;
++constexpr uint32_t kMaxDims = 8;
++// Safety cap above 40/48-core A2/A3 SKUs so larger vector-core counts (e.g., A2/A3/A5) scale automatically.
++constexpr uint32_t kMaxBlocks = 64;
+ constexpr uint32_t kElementsPerBlock = 1024;
+ constexpr uint8_t kQueueBuffers = 2;
+ static_assert(kTileElements % kDmaAlignmentElements == 0, "tile size must be DMA aligned");
+-constexpr int32_t kDeviceId = 0;
++static_assert(kTileElements % kVectorRepeatElements == 0, "tile size must be vector-repeat aligned");
++constexpr int32_t kDefaultDeviceId = 0;
+ }
+ 
+ namespace {
+@@ -87,7 +96,14 @@
+         x = xQueue_.DeQue<float>();
+         y = yQueue_.DeQue<float>();
+         auto z = zQueue_.AllocTensor<float>();
+-        AscendC::Add(z, x, y, vectorCount);
++        const uint32_t wholeRepeats = count - (count % kVectorRepeatElements);
++        if (wholeRepeats != 0) {
++            AscendC::Add(z, x, y, wholeRepeats);
++        }
++        const uint32_t tailElements = count - wholeRepeats;
++        if (tailElements != 0) {
++            AscendC::Add(z[wholeRepeats], x[wholeRepeats], y[wholeRepeats], tailElements);
++        }
+         zQueue_.EnQue(z);
+         xQueue_.FreeTensor(x);
+         yQueue_.FreeTensor(y);
+@@ -112,37 +128,132 @@
+ 
+ __global__ __vector__ void op179089(GM_ADDR inputList, GM_ADDR output)
+ {
+-    // The host packs exactly two rank-one descriptors.
++    // The host packs two contiguous descriptors with rank in [1, kMaxDims].
+     AscendC::ListTensorDesc inputs(inputList);
+-    uint64_t xShape[1]{};
+-    uint64_t yShape[1]{};
++    uint64_t xShape[kMaxDims]{};
++    uint64_t yShape[kMaxDims]{};
+     AscendC::TensorDesc<float> x;
+     AscendC::TensorDesc<float> y;
+     x.SetShapeAddr(xShape);
+     y.SetShapeAddr(yShape);
+     inputs.GetDesc(x, 0);
+     inputs.GetDesc(y, 1);
+-    const uint64_t length = x.GetShape(0);
+-    if (length == 0 || length > kMaxLength || length != y.GetShape(0)) {
++
++    const uint64_t dim = x.GetDim();
++    if (dim == 0 || dim > kMaxDims || dim != y.GetDim()) {
+         return;
+     }
++    uint64_t length = 1;
++    for (uint32_t d = 0; d < static_cast<uint32_t>(dim); ++d) {
++        const uint64_t extent = x.GetShape(d);
++        if (extent == 0 || extent != y.GetShape(d) || extent > kMaxLength / length) {
++            return;
++        }
++        length *= extent;
++    }
+ 
+     AddKernel kernel;
+     kernel.Run(x.GetDataPtr(), y.GetDataPtr(), reinterpret_cast<__gm__ float *>(output), static_cast<uint32_t>(length));
+ }
+ 
+ namespace {
+-struct RankOneDesc {
+-    uint64_t rankAndIndex;
+-    uint64_t length;
+-};
++bool ParseStrictUint64(const char *text, uint64_t &value)
++{
++    if (text == nullptr || text[0] < '0' || text[0] > '9') {
++        return false;
++    }
++    errno = 0;
++    char *end = nullptr;
++    const unsigned long long parsed = std::strtoull(text, &end, 10);
++    if (errno != 0 || end == text || *end != '\0') {
++        return false;
++    }
++    value = static_cast<uint64_t>(parsed);
++    return true;
++}
+ 
+-struct InputList {
+-    uint64_t pointerOffset;
+-    RankOneDesc tensors[2];
+-    uint64_t addresses[2];
+-};
++bool ParseShape(const char *text, std::vector<uint64_t> &shape, uint32_t &totalLength)
++{
++    shape.clear();
++    totalLength = 0;
++    if (text == nullptr || text[0] == '\0') {
++        return false;
++    }
++    uint64_t product = 1;
++    const char *cursor = text;
++    while (true) {
++        const char *sep = cursor;
++        while (*sep != '\0' && *sep != 'x' && *sep != 'X') {
++            ++sep;
++        }
++        if (sep == cursor || shape.size() >= kMaxDims) {
++            return false;
++        }
++        const std::string token(cursor, static_cast<size_t>(sep - cursor));
++        uint64_t extent = 0;
++        if (!ParseStrictUint64(token.c_str(), extent) || extent == 0 || extent > kMaxLength / product) {
++            return false;
++        }
++        shape.push_back(extent);
++        product *= extent;
++        if (*sep == '\0') {
++            break;
++        }
++        cursor = sep + 1;
++        if (*cursor == '\0') {
++            return false;
++        }
++    }
++    totalLength = static_cast<uint32_t>(product);
++    return true;
++}
+ 
++std::string FormatShape(const std::vector<uint64_t> &shape)
++{
++    std::string out;
++    for (size_t i = 0; i < shape.size(); ++i) {
++        if (i > 0) {
++            out.push_back('x');
++        }
++        out += std::to_string(shape[i]);
++    }
++    return out;
++}
++
++std::vector<uint64_t> BuildInputList(const std::vector<uint64_t> &shape, const void *deviceX, const void *deviceY)
++{
++    const uint64_t dim = static_cast<uint64_t>(shape.size());
++    const uint64_t wordsPerDesc = 1 + dim;
++    const uint64_t pointerOffset = (1 + 2 * wordsPerDesc) * sizeof(uint64_t);
++    std::vector<uint64_t> packed;
++    packed.reserve(static_cast<size_t>(1 + 2 * wordsPerDesc + 2));
++    packed.push_back(pointerOffset);
++    for (uint64_t index = 0; index < 2; ++index) {
++        // ListTensorDesc stores the rank in the low 32 bits and the pointer index in the high 32 bits.
++        packed.push_back((index << 32) | dim);
++        for (const uint64_t extent : shape) {
++            packed.push_back(extent);
++        }
++    }
++    packed.push_back(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(deviceX)));
++    packed.push_back(static_cast<uint64_t>(reinterpret_cast<uintptr_t>(deviceY)));
++    return packed;
++}
++
++int32_t ResolveDeviceId()
++{
++    const char *env = std::getenv("OP179089_DEVICE_ID");
++    if (env == nullptr || env[0] == '\0') {
++        return kDefaultDeviceId;
++    }
++    uint64_t parsed = 0;
++    if (!ParseStrictUint64(env, parsed) || parsed > 1024) {
++        std::fprintf(stderr, "Invalid OP179089_DEVICE_ID=%s, falling back to %d\n", env, kDefaultDeviceId);
++        return kDefaultDeviceId;
++    }
++    return static_cast<int32_t>(parsed);
++}
++
+ bool CheckAcl(aclError status, const char *operation)
+ {
+     if (status == ACL_SUCCESS) {
+@@ -155,18 +266,20 @@
+ struct AclSession {
+     bool initialized = false;
+     bool deviceSelected = false;
++    int32_t deviceId = kDefaultDeviceId;
+     aclrtStream stream = nullptr;
+     uint32_t blockLimit = 8;
+ 
+     bool Start()
+     {
++        deviceId = ResolveDeviceId();
+         initialized = CheckAcl(aclInit(nullptr), "aclInit");
+-        deviceSelected = initialized && CheckAcl(aclrtSetDevice(kDeviceId), "aclrtSetDevice");
++        deviceSelected = initialized && CheckAcl(aclrtSetDevice(deviceId), "aclrtSetDevice");
+         if (!deviceSelected || !CheckAcl(aclrtCreateStream(&stream), "aclrtCreateStream")) {
+             return false;
+         }
+         int64_t vectorCores = 0;
+-        if (aclrtGetDeviceInfo(kDeviceId, ACL_DEV_ATTR_VECTOR_CORE_NUM, &vectorCores) == ACL_SUCCESS && vectorCores > 0) {
++        if (aclrtGetDeviceInfo(deviceId, ACL_DEV_ATTR_VECTOR_CORE_NUM, &vectorCores) == ACL_SUCCESS && vectorCores > 0) {
+             blockLimit = static_cast<uint32_t>(std::min<int64_t>(vectorCores, kMaxBlocks));
+         }
+         return true;
+@@ -178,7 +291,7 @@
+             CheckAcl(aclrtDestroyStream(stream), "aclrtDestroyStream");
+         }
+         if (deviceSelected) {
+-            CheckAcl(aclrtResetDevice(kDeviceId), "aclrtResetDevice");
++            CheckAcl(aclrtResetDevice(deviceId), "aclrtResetDevice");
+         }
+         if (initialized) {
+             CheckAcl(aclFinalize(), "aclFinalize");
+@@ -265,41 +378,43 @@
+     }
+     constexpr size_t sampleCount = sizeof(samples) / sizeof(samples[0]);
+     std::sort(samples, samples + sampleCount);
+-    std::printf("BENCH N=%u blocks=%u median_us=%.3f min_us=%.3f max_us=%.3f\n",
+-        length, blocks, samples[sampleCount / 2], samples[0], samples[sampleCount - 1]);
++    const double medianUs = static_cast<double>(samples[sampleCount / 2]);
++    // 2 reads (x, y) + 1 write (z), decimal GB/s.
++    const double totalBytes = 3.0 * static_cast<double>(length) * static_cast<double>(sizeof(float));
++    const double bwGbs = medianUs > 0.0 ? (totalBytes / (medianUs * 1e3)) : 0.0;
++    std::printf("BENCH N=%u blocks=%u median_us=%.3f min_us=%.3f max_us=%.3f bw_gbs=%.2f\n",
++        length, blocks, samples[sampleCount / 2], samples[0], samples[sampleCount - 1], bwGbs);
+     return true;
+ }
+ 
+-bool RunCase(const AclSession &session, uint32_t length, bool benchmark)
++bool RunCase(const AclSession &session, const std::vector<uint64_t> &shape, uint32_t length, bool benchmark)
+ {
+     const aclrtStream stream = session.stream;
+     constexpr float guardValue = -123456.0f;
+     std::vector<float> x(length);
+     std::vector<float> y(length);
+     // Keep an aligned region of guard values after the logical output to detect tail overwrites.
+-    std::vector<float> z(length + kDmaAlignmentElements, guardValue);
++    std::vector<float> z(static_cast<size_t>(length) + kDmaAlignmentElements, guardValue);
+     for (uint32_t i = 0; i < length; ++i) {
+         x[i] = (static_cast<int32_t>(i % 257) - 128) * 0.25f;
+         y[i] = (static_cast<int32_t>(i % 127) - 63) * 0.5f;
+     }
+-    const size_t inputBytes = length * sizeof(float);
++    const size_t inputBytes = static_cast<size_t>(length) * sizeof(float);
+     const size_t outputBytes = z.size() * sizeof(float);
+     DeviceBuffer deviceX, deviceY, deviceZ, deviceList;
+-    if (!deviceX.Allocate(inputBytes) || !deviceY.Allocate(inputBytes) ||
+-        !deviceZ.Allocate(outputBytes) || !deviceList.Allocate(sizeof(InputList))) {
++    if (!deviceX.Allocate(inputBytes) || !deviceY.Allocate(inputBytes) || !deviceZ.Allocate(outputBytes)) {
+         return false;
+     }
+ 
+-    // ListTensorDesc stores the rank in the low 32 bits and the pointer index in the high 32 bits.
+-    const InputList list{
+-        offsetof(InputList, addresses),
+-        {{1, length}, {(uint64_t{1} << 32) | 1, length}},
+-        {reinterpret_cast<uintptr_t>(deviceX.Data()), reinterpret_cast<uintptr_t>(deviceY.Data())}
+-    };
++    const std::vector<uint64_t> list = BuildInputList(shape, deviceX.Data(), deviceY.Data());
++    const size_t listBytes = list.size() * sizeof(uint64_t);
++    if (!deviceList.Allocate(listBytes)) {
++        return false;
++    }
+     if (!CheckAcl(aclrtMemcpy(deviceX.Data(), inputBytes, x.data(), inputBytes, ACL_MEMCPY_HOST_TO_DEVICE), "copy x") ||
+         !CheckAcl(aclrtMemcpy(deviceY.Data(), inputBytes, y.data(), inputBytes, ACL_MEMCPY_HOST_TO_DEVICE), "copy y") ||
+         !CheckAcl(aclrtMemcpy(deviceZ.Data(), outputBytes, z.data(), outputBytes, ACL_MEMCPY_HOST_TO_DEVICE), "initialize z") ||
+-        !CheckAcl(aclrtMemcpy(deviceList.Data(), sizeof(list), &list, sizeof(list), ACL_MEMCPY_HOST_TO_DEVICE), "copy input list")) {
++        !CheckAcl(aclrtMemcpy(deviceList.Data(), listBytes, list.data(), listBytes, ACL_MEMCPY_HOST_TO_DEVICE), "copy input list")) {
+         return false;
+     }
+ 
+@@ -327,32 +442,62 @@
+             return false;
+         }
+     }
+-    for (uint32_t i = length; i < z.size(); ++i) {
++    for (size_t i = length; i < z.size(); ++i) {
+         if (z[i] != guardValue) {
+-            std::fprintf(stderr, "N=%u: output guard overwritten at index %u\n", length, i);
++            std::fprintf(stderr, "N=%u: output guard overwritten at index %zu\n", length, i);
+             return false;
+         }
+     }
+-    std::printf("PASS N=%u (blocks=%u, CPU comparison and output guard)\n", length, blocks);
++    if (shape.size() == 1) {
++        std::printf("PASS N=%u (blocks=%u, CPU comparison and output guard)\n", length, blocks);
++    } else {
++        std::printf("PASS N=%u shape=%s (blocks=%u, CPU comparison and output guard)\n",
++            length, FormatShape(shape).c_str(), blocks);
++    }
+     return true;
+ }
++
++bool RunCase(const AclSession &session, uint32_t length, bool benchmark)
++{
++    return RunCase(session, std::vector<uint64_t>{length}, length, benchmark);
++}
+ } // namespace
+ 
+ int32_t main(int argc, char const *argv[])
+ {
+-    const bool benchmark = argc > 1 && std::strcmp(argv[1], "--benchmark") == 0;
+-    const int lengthArg = benchmark ? 2 : 1;
+-    const bool hasLength = argc > lengthArg;
+-    unsigned long requestedLength = 0;
+-    if (hasLength && argv[lengthArg][0] >= '0' && argv[lengthArg][0] <= '9') {
+-        char *end = nullptr;
+-        requestedLength = std::strtoul(argv[lengthArg], &end, 10);
+-        if (*end != '\0') {
+-            requestedLength = 0;
++    bool benchmark = false;
++    bool hasShape = false;
++    std::vector<uint64_t> requestedShape;
++    uint32_t requestedLength = 0;
++
++    int argIndex = 1;
++    if (argIndex < argc && std::strcmp(argv[argIndex], "--benchmark") == 0) {
++        benchmark = true;
++        ++argIndex;
++    }
++
++    bool validArgs = true;
++    if (argIndex < argc && std::strcmp(argv[argIndex], "--shape") == 0) {
++        if (argIndex + 2 != argc || !ParseShape(argv[argIndex + 1], requestedShape, requestedLength)) {
++            validArgs = false;
++        } else {
++            hasShape = true;
+         }
++    } else if (argIndex < argc) {
++        uint64_t parsedLength = 0;
++        if (argIndex + 1 != argc || !ParseStrictUint64(argv[argIndex], parsedLength) ||
++            parsedLength == 0 || parsedLength > kMaxLength) {
++            validArgs = false;
++        } else {
++            requestedShape = {parsedLength};
++            requestedLength = static_cast<uint32_t>(parsedLength);
++            hasShape = true;
++        }
+     }
+-    if (argc > lengthArg + 1 || (hasLength && (requestedLength == 0 || requestedLength > kMaxLength))) {
+-        std::fprintf(stderr, "Usage: %s [--benchmark] [length: 1..%u]\n", argv[0], kMaxLength);
++
++    if (!validArgs) {
++        std::fprintf(stderr, "Usage: %s [--benchmark] [length: 1..%u | --shape d0xd1... (1..%uD)]\n",
++            argv[0], kMaxLength, kMaxDims);
+         return 2;
+     }
+ 
+@@ -360,20 +505,45 @@
+     if (!session.Start()) {
+         return 1;
+     }
+-    if (hasLength) {
+-        return RunCase(session, static_cast<uint32_t>(requestedLength), benchmark) ? 0 : 1;
++    if (hasShape) {
++        return RunCase(session, requestedShape, requestedLength, benchmark) ? 0 : 1;
+     }
+ 
+-    const uint32_t validationLengths[] = {1, 7, 8, 9, 511, 512, 513, 1023, 1024, 1025, 4095, 4096, 4097,
+-        8192, 8193, 40959, 40960, 40961, kMaxLength - 1, kMaxLength};
+-    const uint32_t benchmarkLengths[] = {16, 1024, 8193, 65536, 262144, kMaxLength - 1, kMaxLength};
+-    const uint32_t *lengths = benchmark ? benchmarkLengths : validationLengths;
+-    const size_t count = benchmark ? sizeof(benchmarkLengths) / sizeof(benchmarkLengths[0])
+-                                   : sizeof(validationLengths) / sizeof(validationLengths[0]);
+-    for (size_t i = 0; i < count; ++i) {
+-        if (!RunCase(session, lengths[i], benchmark)) {
++    if (benchmark) {
++        const uint32_t benchmarkLengths[] = {
++            16, 1024, 8193, 65536, 262144, 1048575, 1048576, 4 * 1024 * 1024, 16 * 1024 * 1024, kMaxLength
++        };
++        for (const uint32_t length : benchmarkLengths) {
++            if (!RunCase(session, length, true)) {
++                return 1;
++            }
++        }
++        return 0;
++    }
++
++    const uint32_t validationLengths[] = {
++        1, 7, 8, 9, 511, 512, 513, 1023, 1024, 1025, 4095, 4096, 4097,
++        8192, 8193, 40959, 40960, 40961, 1048575, 1048576, 4 * 1024 * 1024
++    };
++    for (const uint32_t length : validationLengths) {
++        if (!RunCase(session, length, false)) {
+             return 1;
+         }
+     }
++    const std::vector<std::vector<uint64_t>> multiDimShapes = {
++        {2, 3},
++        {16, 257},
++        {32, 64, 129},
++        {4, 8, 16, 33},
++    };
++    for (const auto &shape : multiDimShapes) {
++        uint64_t product = 1;
++        for (const uint64_t extent : shape) {
++            product *= extent;
++        }
++        if (!RunCase(session, shape, static_cast<uint32_t>(product), false)) {
++            return 1;
++        }
++    }
+     return 0;
+ }

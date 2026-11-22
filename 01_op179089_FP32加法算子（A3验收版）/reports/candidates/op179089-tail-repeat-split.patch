@@ -1,0 +1,38 @@
+--- op179089.asc	2026-11-22 10:05:54.000000000 -0800
++++ reports/candidates/op179089-tail-repeat-split.asc	2026-11-21 18:57:31.939390300 -0800
+@@ -15,6 +15,9 @@
+ namespace {
+ constexpr uint32_t kTileElements = 4096;
+ constexpr uint32_t kDmaAlignmentElements = 32 / sizeof(float);
++// One 256 B vector repeat = 64 fp32 lanes. A multi-repeat op whose last repeat is
++// partial reads UB past the region the preceding DMA filled, so tiles are cut here.
++constexpr uint32_t kVectorRepeatElements = 256 / sizeof(float);
+ // 32M float32 elements = 128 MB/tensor (384 MB total across x/y/z), exceeding A2/A3 L2 cache.
+ constexpr uint32_t kMaxLength = 32 * 1024 * 1024;
+ constexpr uint32_t kMaxDims = 8;
+@@ -23,6 +26,7 @@
+ constexpr uint32_t kElementsPerBlock = 1024;
+ constexpr uint8_t kQueueBuffers = 2;
+ static_assert(kTileElements % kDmaAlignmentElements == 0, "tile size must be DMA aligned");
++static_assert(kTileElements % kVectorRepeatElements == 0, "tile size must be a whole vector repeat count");
+ constexpr int32_t kDefaultDeviceId = 0;
+ }
+ 
+@@ -59,7 +63,16 @@
+         for (; offset + kTileElements <= blockLength; offset += kTileElements) {
+             ProcessTile<true>(offset, kTileElements);
+         }
+-        const uint32_t tail = blockLength - offset;
++        uint32_t tail = blockLength - offset;
++        // Split the tail on the vector-repeat boundary so every Add is either a whole
++        // number of repeats or a single sub-repeat op; a partial final repeat inside a
++        // multi-repeat op is the configuration the A3 memcheck reports flag.
++        const uint32_t wholeRepeats = tail - tail % kVectorRepeatElements;
++        if (wholeRepeats != 0) {
++            ProcessTile<true>(offset, wholeRepeats);
++            offset += wholeRepeats;
++            tail -= wholeRepeats;
++        }
+         if (tail == 0) {
+             return;
+         }
